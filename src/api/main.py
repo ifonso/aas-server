@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .example import setup_example_routes
+from .repositories.aas_repository import AASRepository
+from .services.aas_service import AASService
+from .controllers.aas_controller import AASController
 
 app = FastAPI(
     title="AAS Core API",
@@ -8,10 +10,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS
+# Configura CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -21,5 +23,17 @@ app.add_middleware(
 async def root():
     return {"message": "Welcome to AAS Core API"}
 
-# Setup example routes
-setup_example_routes(app) 
+# Inicializa repositories
+aas_repository = AASRepository()
+
+# Inicializa services
+aas_service = AASService(aas_repository)
+
+# Inicializa controllers
+aas_controller = AASController(aas_service)
+
+# Setup das rotas
+aas_controller.setup_routes()
+
+# Incluir rotas
+app.include_router(aas_controller.router) 
