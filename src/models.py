@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import List, Union, Dict, Optional
+from typing import List, Union, Optional, Dict, Type
 from enum import Enum
 from pydantic import BaseModel, model_validator
-from datetime import date, time
 
 
 class ValueType(str, Enum):
@@ -12,14 +11,13 @@ class ValueType(str, Enum):
     INT = "int"
 
 
-
 class DataElementCategory(str, Enum):
     CONSTANT = "CONSTANT"
     PARAMETER = "PARAMETER"
     VARIABLE = "VARIABLE"
 
 
-VALUE_TYPE_TO_PYTHON = {
+VALUE_TYPE_TO_PYTHON: Dict[ValueType, Type] = {
     ValueType.STRING: str,
     ValueType.FLOAT: float,
     ValueType.INT: int,
@@ -28,7 +26,7 @@ VALUE_TYPE_TO_PYTHON = {
 
 class BaseElement(BaseModel):
     id_short: str
-    category: Optional[str] = None
+    category: Optional[DataElementCategory] = None
     description: Optional[str] = None
 
 
@@ -37,12 +35,12 @@ class Property(BaseElement):
     value_type: ValueType
 
     @model_validator(mode="after")
-    def check_value_type(self):
-        expected = VALUE_TYPE_TO_PYTHON[self.value_type]
-
-        if not isinstance(self.value, expected):
-            raise TypeError(f"value must be of type {expected.__name__} for value_type '{self.value_type}'")
-
+    def validate_value_type(self) -> Property:
+        expected_type = VALUE_TYPE_TO_PYTHON[self.value_type]
+        if not isinstance(self.value, expected_type):
+            raise TypeError(
+                f"value must be of type {expected_type.__name__} for value_type '{self.value_type}'"
+            )
         return self
 
 
@@ -59,4 +57,3 @@ class AssetAdministrationShell(BaseModel):
     id: str
     id_short: str
     data_elements: List[Submodel]
-

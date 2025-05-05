@@ -1,133 +1,104 @@
-from typing import Optional, Union, Tuple
-from src.models import AssetAdministrationShell, Submodel, Property, ValueType, SubmodelElementCollection
+from typing import Optional, Union, Tuple, Any, Dict
+from src.models import AssetAdministrationShell, Submodel, Property, ValueType, SubmodelElementCollection, DataElementCategory
 
 from basyx.aas.adapter import aasx
 from basyx.aas import model
+from basyx.aas.model import Property as AASProperty, SubmodelElementCollection as AASSMC, Submodel as AASSubmodel
 
+
+def extract_first_description(desc_dict: Optional[Dict[str, str]]) -> Optional[str]:
+    return next(iter(desc_dict.values()), None) if desc_dict else None
+
+def guess_and_cast_value_type(value: Any) -> Tuple[ValueType, Union[int, float, str]]:
+    try:
+        return ValueType.INT, int(value)
+    except (ValueError, TypeError):
+        try:
+            return ValueType.FLOAT, float(value)
+        except (ValueError, TypeError):
+            return ValueType.STRING, str(value)
+
+def build_property(prop: AASProperty) -> Property:
+    assert prop.id_short, "Property missing id_short"
+    assert prop.category, "Property missing category"
+    assert prop.value is not None, "Property missing value"
+
+    value_type, value = guess_and_cast_value_type(prop.value)
+
+    return Property(
+        id_short=prop.id_short,
+        category=DataElementCategory(prop.category),
+        description=extract_first_description(prop.description), # type: ignore
+        value=value,
+        value_type=value_type
+    )
+
+def build_smc(smc: AASSMC) -> SubmodelElementCollection:
+    assert smc.id_short, "SMC missing id_short"
+    assert smc.category, "SMC missing category"
+
+    elements = []
+    for element in smc.value:
+        if isinstance(element, AASProperty):
+            elements.append(build_property(element))
+        elif isinstance(element, AASSMC):
+            elements.append(build_smc(element))
+
+    return SubmodelElementCollection(
+        id_short=smc.id_short,
+        category=DataElementCategory(smc.category),
+        description=extract_first_description(smc.description), # type: ignore
+        value=elements
+    )
+
+def convert_submodel(sm: AASSubmodel) -> Submodel:
+    assert sm.id, "Submodel missing id"
+    assert sm.id_short, "Submodel missing id_short"
+
+    elements = []
+    for e in sm.submodel_element:
+        if isinstance(e, AASSMC):
+            elements.append(build_smc(e))
+        elif isinstance(e, AASProperty):
+            try:
+                elements.append(build_property(e))
+            except Exception as err:
+                print(f"Error parsing property {e.id_short}: {err}")
+
+    return Submodel(
+        id=sm.id,
+        id_short=sm.id_short,
+        submodel_elements=elements
+    )
 
 def aas_metamodel_converter(filepath: str) -> AssetAdministrationShell: 
-    asset_administration_shell: Optional[AssetAdministrationShell] = None
-
     obj_store: model.DictObjectStore[model.Identifiable] = model.DictObjectStore()
     file_store = aasx.DictSupplementaryFileContainer()
 
     with aasx.AASXReader(filepath) as reader:
-        reader.read_into(object_store=obj_store,
-                         file_store=file_store)
+        reader.read_into(object_store=obj_store, file_store=file_store)
 
-    # Criação do AAS
-    for el in [e for e in obj_store if isinstance(e, model.aas.AssetAdministrationShell)]:
-        assert el.id, "no empty id"
-        assert el.id_short, "no empty id_short"
+    aas_instance: Optional[AssetAdministrationShell] = None
 
-        print(el.display_name)
+    for el in obj_store:
+        if isinstance(el, model.aas.AssetAdministrationShell):
+            assert el.id, "AAS missing id"
+            assert el.id_short, "AAS missing id_short"
 
-        asset_administration_shell = AssetAdministrationShell(
-            id=el.id,
-            id_short=el.id_short,
-            data_elements=[]
-        )
+            aas_instance = AssetAdministrationShell(
+                id=el.id,
+                id_short=el.id_short,
+                data_elements=[]
+            )
 
-    assert asset_administration_shell, "No AAS in aasx file."
+    assert aas_instance, "No AssetAdministrationShell found in AASX file."
 
-    # Populando metamodelos
-    for sm in [e for e in obj_store if isinstance(e, model.Submodel)]:
-        asset_administration_shell.data_elements.append(submodel_converter(sm))
+    for sm in obj_store:
+        if isinstance(sm, model.Submodel):
+            aas_instance.data_elements.append(convert_submodel(sm))
 
-
-    print(asset_administration_shell.model_dump_json(indent=2))
-
-    return asset_administration_shell
+    return aas_instance
 
 
-def converter(valor) -> Tuple[ValueType, Union[int, float, str]]:
-    try:
-        return (ValueType.INT, int(valor))
-
-    except (ValueError, TypeError):
-        try:
-            return (ValueType.FLOAT, float(valor))
-
-        except (ValueError, TypeError):
-            return (ValueType.STRING, str(valor))
-
-
-def property_builder(prop: model.Property) -> Property:
-    assert prop.id_short, f"prop {prop} has no id_short"
-    assert prop.category is not None, f"prop {prop} has no category"
-    assert prop.value is not None, f"prop {prop} has no value"
-    assert prop.value_type is not None, f"prop {prop} has no value_type"
-
-    description: Optional[str] = None
-
-    if prop.description:
-        description = next(iter(prop.description.values()), None)
-
-    typ, value = converter(prop.value)
-
-    return Property(
-        id_short=prop.id_short,
-        category=prop.category,
-        description=description,
-        value=value, # type: ignore
-        value_type=typ
-    )
-
-
-def smc_builder(smc: model.SubmodelElementCollection) -> SubmodelElementCollection:
-    assert smc.id_short, "no id_short in collection"
-    assert smc.category, "no category set"
-
-    description: Optional[str] = None
-
-    if smc.description:
-        description = next(iter(smc.description.values()), None)
-
-    submodel_collection = SubmodelElementCollection(
-        id_short=smc.id_short,
-        category=smc.category,
-        description=description,
-        value=[]
-    )
-
-    for element in smc.value:
-        if isinstance(element, model.Property):
-            submodel_collection.value.append(property_builder(element))
-
-        elif isinstance(element, model.SubmodelElementCollection):
-            submodel_collection.value.append(smc_builder(element))
-
-        else:
-            continue
-
-    return submodel_collection
-
-
-def submodel_converter(sm: model.Submodel) -> Submodel:
-    assert sm.id, "no id in submodel"
-    assert sm.id_short, "no id_short in submodel"
-
-    submodel = Submodel(
-        id=sm.id,
-        id_short=sm.id_short,
-        submodel_elements=[]
-    )
-
-    for e in sm.submodel_element:
-        if isinstance(e, model.SubmodelElementCollection):
-            submodel.submodel_elements.append(smc_builder(e))
-        
-        elif isinstance(e, model.Property):
-            try:
-                submodel.submodel_elements.append(property_builder(e))
-            except Exception as e:
-                print(e)
-
-        else:
-            continue
-    
-    return submodel
-
-
-aas_metamodel_converter("./aas-static/FishTankAAS.aasx")
-
+aas = aas_metamodel_converter("./aas-static/FishTankAAS.aasx")
+print(aas.model_dump_json(indent=2))
